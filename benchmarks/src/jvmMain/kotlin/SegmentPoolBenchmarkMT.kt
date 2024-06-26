@@ -12,8 +12,9 @@ import org.openjdk.jmh.annotations.GroupThreads
 
 @State(Scope.Benchmark)
 open class SegmentPoolBenchmarkMT {
+    private val tlb = ThreadLocal.withInitial { Buffer() }
     private fun testCycle(): Buffer {
-        val buffer = Buffer()
+        val buffer = tlb.get()
         buffer.writeByte(0)
         buffer.clear()
         return buffer

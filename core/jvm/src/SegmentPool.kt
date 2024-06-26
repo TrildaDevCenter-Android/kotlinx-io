@@ -20,7 +20,9 @@
  */
 package kotlinx.io
 
+import kotlinx.io.SegmentPool.HASH_BUCKET_COUNT
 import kotlinx.io.SegmentPool.LOCK
+import kotlinx.io.SegmentPool.MAX_SIZE
 import kotlinx.io.SegmentPool.recycle
 import kotlinx.io.SegmentPool.take
 import java.util.concurrent.atomic.AtomicReference
@@ -58,7 +60,7 @@ internal actual object SegmentPool {
      * machine with 6 cores will have 8 hash buckets.
      */
     private val HASH_BUCKET_COUNT =
-        Integer.highestOneBit(Runtime.getRuntime().availableProcessors() * 2 - 1)
+        1 //Integer.highestOneBit(Runtime.getRuntime().availableProcessors() * 2 - 1)
 
     /**
      * Hash buckets each contain a singly-linked list of segments. The index/key is a hash function of
@@ -81,25 +83,50 @@ internal actual object SegmentPool {
     actual fun take(): Segment {
         val firstRef = firstRef()
 
-        val first = firstRef.getAndSet(LOCK)
-        when {
-            first === LOCK -> {
-                // We didn't acquire the lock. Don't take a pooled segment.
-                return Segment()
-            }
+        while (true) {
+            val first = firstRef.getAndSet(LOCK)
+            when {
+                first === LOCK -> {
+                    // We didn't acquire the lock. Don't take a pooled segment.
+                    continue
+                }
 
-            first == null -> {
-                // We acquired the lock but the pool was empty. Unlock and return a new segment.
-                firstRef.set(null)
-                return Segment()
-            }
+                first == null -> {
+                    // We acquired the lock but the pool was empty. Unlock and return a new segment.
+                    firstRef.set(null)
+                    return Segment()
+                }
 
-            else -> {
-                // We acquired the lock and the pool was not empty. Pop the first element and return it.
-                firstRef.set(first.next)
-                first.next = null
-                first.limit = 0
-                return first
+                else -> {
+                    // We acquired the lock and the pool was not empty. Pop the first element and return it.
+                    firstRef.set(first.next)
+                    first.next = null
+                    first.limit = 0
+                    return first
+                }
+            }
+        }
+    }
+
+    private fun takeSlowPath(firstRef: AtomicReference<Segment?>): Segment {
+        while (true) {
+            val first = firstRef.getAndSet(LOCK)
+            when {
+                first === LOCK -> continue
+
+                first == null -> {
+                    // We acquired the lock but the pool was empty. Unlock and return a new segment.
+                    firstRef.set(null)
+                    return Segment()
+                }
+
+                else -> {
+                    // We acquired the lock and the pool was not empty. Pop the first element and return it.
+                    firstRef.set(first.next)
+                    first.next = null
+                    first.limit = 0
+                    return first
+                }
             }
         }
     }
@@ -111,18 +138,22 @@ internal actual object SegmentPool {
 
         val firstRef = firstRef()
 
-        val first = firstRef.get()
-        if (first === LOCK) return // A take() is currently in progress.
-        val firstLimit = first?.limit ?: 0
-        if (firstLimit >= MAX_SIZE) return // Pool is full.
-
-        segment.next = first
         segment.pos = 0
-        segment.limit = firstLimit + Segment.SIZE
 
-        // If we lost a race with another operation, don't recycle this segment.
-        if (!firstRef.compareAndSet(first, segment)) {
-            segment.next = null // Don't leak a reference in the pool either!
+        while (true) {
+            val first = firstRef.get()
+            if (first === LOCK) continue // A take() is currently in progress.
+            val firstLimit = first?.limit ?: 0
+            if (firstLimit >= MAX_SIZE) return // Pool is full.
+
+            segment.next = first
+            segment.limit = firstLimit + Segment.SIZE
+
+            // If we lost a race with another operation, don't recycle this segment.
+            if (firstRef.compareAndSet(first, segment)) {
+                //segment.next = null // Don't leak a reference in the pool either!
+                return
+            }
         }
     }
 
