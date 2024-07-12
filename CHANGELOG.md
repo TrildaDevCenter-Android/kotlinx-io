@@ -1,7 +1,7 @@
 # CHANGELOG
 
 ## 0.5.0
-> Published XXX July 2024
+> Published 12 July 2024
 
 ### Features
 - Provided an API allowing direct access to Buffer and Segment internals [#135](https://github.com/Kotlin/kotlinx-io/issues/135), [#166](https://github.com/Kotlin/kotlinx-io/issues/166)
